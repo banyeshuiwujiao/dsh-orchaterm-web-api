@@ -1,6 +1,6 @@
 {
   "name": "dsh-orchaterm-web-api",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "OrcaTerm (腾讯云或壳终端) 反代接入 DSH 模型选择器",
   "type": "module",
   "main": "lib/provider.js",

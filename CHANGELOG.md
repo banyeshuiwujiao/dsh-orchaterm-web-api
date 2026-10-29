@@ -1,5 +1,33 @@
 All notable changes to the `dsh-orchaterm-web-api` plugin will be documented in this file.
 
+## [0.6.1] - 2026-10-29
+
+思考档位接入 DSH 模型选择器。
+
+### Symptom
+模型选择器里只能选模型，看不到 OrcaTerm 客户端那套思考强度（Low/High/Max），
+也无法像客户端「思考模式」开关那样整体关闭思考；实际请求一直按
+`enableThinking:true` + `thinkingLevel:'high'` 发上游。
+
+### Root cause
+DSH 的档位只来自适配器 `resolveModel()` 返回的 `reasoning.efforts`
+（`dsh-api-session-controller` 的模型目录会逐个模型调用 `resolveModelInfo` 取 reasoning），
+本插件从未申报该字段；`stream()` 也没有把宿主传入的 `options.reasoningEffort`
+写进请求体。反代本身早已支持 `reasoning_effort`（`backend/server.js` 映射
+`none`→关闭、`low`/`max`→对应档、其它→`high`），缺的只是适配器这一层。
+
+### Fix
+- `lib/config.js`：`KNOWN_MODELS` 增加 `thinkingOff`，对应客户端「思考模式」开关。
+- `lib/provider.js`：`resolveModel()` 按模型申报 `reasoning.efforts`（Off/Low/High/Max，
+  默认 High，目录外模型不申报）；`stream()` 透传 `reasoning_effort`，`Off` → `none`。
+- 档位依据 OrcaTerm 1.6.6 模型设置实测：`DeepSeek-V4.1-Flash` / `Hy4-preview` / `Hy3`
+  有「思考模式」开关；`Kimi-K3` / `GLM-5.3-Flash` 只有档位、没有开关。
+- 测试：`test/smoke.mjs` 新增 5c（各模型档位申报）与 5d（`max`/`low` 透传、`Off`→`none`、默认不带字段）。
+
+### Validation
+`npm test` 7 条链全绿；对本地反代实测 `reasoning_effort:none` 无 reasoning 帧、
+`low` 有 reasoning 帧，`resolveModel` 返回的档位与客户端设置一致。
+
 ## [0.6.0] - 2026-10-27
 
 AccessToken 自己续期（`OAuthRefreshToken`）—— 不再需要把 OrcaTerm 客户端开着。

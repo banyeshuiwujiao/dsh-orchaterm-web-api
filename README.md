@@ -76,8 +76,13 @@ cd C:\AITask\dsh-client-config\plugins\dsh-orchaterm-web-api
    - 完整支持上游的回答模式（`completion`）与提问反问模式（`ask`），反问选项自动格式化为 Markdown 列表。
    - 内置流式前缀剥离器，彻底消除上游无意义的初始问候语，纯寒暄轮次智能原样吐回。
    - 会话级重复正文剥离（v0.3.0）：同一段正文不会在下一轮再显示一次。
-3. **思维链（Thinking）流式支持**：
-   - 默认开启 `enableThinking`，使用 `Hy4-preview`、`DeepSeek-V4.1-Flash`、`Kimi-K3` 等支持思考模式的模型时，深度思考过程以 `reasoning-delta` 实时流式呈现在 DSH 思考气泡中。
+3. **思维链（Thinking）流式支持与可选档位（v0.6.1）**：
+   - 深度思考过程以 `reasoning-delta` 实时流式呈现在 DSH 思考气泡中。
+   - DSH 模型选择器会显示 OrcaTerm 客户端的思考档位，默认 `High`；选择会被透传为
+     `reasoning_effort`，其中 `Off` 发 `none`（反代据此发 `enableThinking:false`）。
+   - 档位表：`DeepSeek-V4.1-Flash` Off/Low/High/Max；`Hy4-preview` Off/High；
+     `Hy3` Off/Low/High；`Kimi-K3` Low/High/Max；`GLM-5.3-Flash` Low/High/Max。
+     后两个模型在客户端没有「思考模式」开关，因此不提供 Off。
 4. **精选 5 大核心模型**：
    - `DeepSeek-V4.1-Flash`（默认，1M 上下文，支持图片）、`Hy4-preview`（1M 上下文）、`Hy3`（128K）、`Kimi-K3`（1M 上下文，支持图片）、`GLM-5.3-Flash`（申报 300K，支持图片）。
 5. **模型 ID 兼容路由（证据边界）**：

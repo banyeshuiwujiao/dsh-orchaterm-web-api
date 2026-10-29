@@ -131,6 +131,75 @@ console.log('5b. 验证宿主适配器契约面完整（实报：imageRequestPri
   )
 }
 
+console.log('5c. 验证思考档位申报（宿主选择器只认 resolveModel.reasoning）...')
+{
+  const effortsOf = async (model) => {
+    const info = await adapterInstance.resolveModel(PROVIDER_ID, model)
+    return info.reasoning === undefined ? undefined : info.reasoning.efforts.map((effort) => effort.id)
+  }
+
+  // 有「思考模式」开关的模型：Off + 各自档位，默认 High。
+  assert.deepEqual(await effortsOf('deepseek-v4.1-flash'), ['off', 'low', 'high', 'max'])
+  assert.deepEqual(await effortsOf('hy4-preview'), ['off', 'high'])
+  assert.deepEqual(await effortsOf('hy3'), ['off', 'low', 'high'])
+
+  // 客户端没有开关的模型：只能选档位，不给 Off。
+  assert.deepEqual(await effortsOf('kimi-k3'), ['low', 'high', 'max'])
+  assert.deepEqual(await effortsOf('glm-5.3-flash'), ['low', 'high', 'max'])
+
+  const ds = await adapterInstance.resolveModel(PROVIDER_ID, 'deepseek-v4.1-flash')
+  assert.equal(ds.reasoning.defaultEffort, 'high')
+  const hy4 = await adapterInstance.resolveModel(PROVIDER_ID, 'hy4-preview')
+  assert.equal(hy4.reasoning.defaultEffort, 'high')
+
+  // 目录没收录的 BYO 模型不申报，避免给出上游不认的档位。
+  const byo = await adapterInstance.resolveModel(PROVIDER_ID, 'byo-custom-model')
+  assert.equal(byo.reasoning, undefined)
+}
+
+console.log('5d. 验证 reasoning_effort 透传（Off → none）...')
+{
+  const originalFetch = globalThis.fetch
+  let sent = null
+  globalThis.fetch = async (_url, init) => {
+    sent = JSON.parse(init.body)
+    const chunk = {
+      id: 'chatcmpl-test',
+      object: 'chat.completion.chunk',
+      created: 0,
+      model: 'deepseek-v4.1-flash',
+      choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: null }],
+    }
+    return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }
+  const opts = { ...DEFAULTS, baseUrl: 'http://127.0.0.1:8793' }
+  const fakeManager = { ensure: async () => ({ status: 'ok' }), dispose() {} }
+  const drain = async (reasoningEffort) => {
+    sent = null
+    const options = {
+      messages: [{ role: 'user', content: 'hi' }],
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    }
+    // 每次用新适配器，避免上下文对账把「同样的问题重发」当成重试而打日志。
+    const adapter = new OrcaTermWebApiAdapter({}, null, null)
+    for await (const _chunk of adapter.stream('deepseek-v4.1-flash', options, opts, fakeManager)) {
+      // 只关心请求体
+    }
+    return sent
+  }
+  try {
+    assert.equal((await drain('max')).reasoning_effort, 'max')
+    assert.equal((await drain('low')).reasoning_effort, 'low')
+    assert.equal((await drain('off')).reasoning_effort, 'none')
+    assert.equal(Object.hasOwn(await drain(undefined), 'reasoning_effort'), false)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+}
+
 console.log('6. 验证问候语剥离 (createGreetingStripper)...')
 {
   // 分片模拟打字机流：问候语被吃掉，正文放行
