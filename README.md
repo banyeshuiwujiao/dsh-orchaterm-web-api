@@ -332,6 +332,60 @@ Invoke-RestMethod http://127.0.0.1:8793/health | ConvertTo-Json -Depth 6
 
 ---
 
+## 图片：能力申报 + 宿主侧转述（v0.7.0）
+
+### 问题
+
+上游助手网关的协议是**纯文本**（`content` 就是一串字符串），图片字节发不过去。
+插件原来照直申报 `inputModalities: ['text']`，于是宿主在准入门就把带图会话拒了：
+
+```
+Model "hy3" does not support image input.   (reason: MODEL_DOES_NOT_SUPPORT_IMAGES)
+```
+
+Web 端表现为「当前模型不支持图片，请切换支持图片的模型」—— 会话根本发不出去。
+但 DSH Web 侧本来就有两条现成的识图路子（magpie 的网关侧转述、dsh-vision 的本地多模态），
+所以「上游模型自己看不看得见图」不该决定「这条路由能不能接图片附件」。
+
+### 做法
+
+1. **能力申报**：本路由的**所有**模型（含 CGI 目录外的 BYO 模型）都申报
+   `inputModalities: ['text','image']`。开关：`assumeImageInput`（默认 `true`）。
+   准入门读的是 `resolveModel()` 的元信息，所以那里走同一套判定，
+   否则目录外的模型仍会被当成 text-only。
+2. **图片不丢**：请求装配阶段，图片块被换成模型可见的文字：
+   - ① 本地多模态端点给出的描述（describe-first，语义与 magpie 一致）；
+   - ② 归一化副本在工具执行世界里的只读路径（模型还能用本地工具自己看那张图）。
+3. **识图端点**：与 dsh-vision 插件共用同一套环境变量
+   （`VISION_API_KEY` / `VISION_BASE_URL` / `VISION_MODEL` / `VISION_LANG`），
+   插件 config 里的 `visionApiKey` / `visionBaseUrl` / `visionModel` 优先。
+   端点没配或调用失败时**只给路径句柄**，不静默丢图，并在日志里报原因。
+4. **缓存**：识图结果按附件 id 缓存，同一张图在后续轮次不重复转述；失败不缓存（下一轮可重试）。
+
+### 配置
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `assumeImageInput` | `true` | 所有模型都申报可读图 |
+| `visionApiKey` | `''` | 空 = 读环境变量 `VISION_API_KEY` |
+| `visionBaseUrl` | `''` | 空 = 读 `VISION_BASE_URL`（带 `/v1` 这类前缀） |
+| `visionModel` | `''` | 空 = 读 `VISION_MODEL` |
+| `visionTimeoutMs` | `120000` | 单次转述超时 |
+| `visionMaxTokens` | `1024` | 描述正文长度上限 |
+| `visionLang` | `'zh'` | 描述语言（`zh` / `en`） |
+
+### 边界（如实记录）
+
+- **上游收不到像素**：图片在宿主侧就变成了文字；上游 Agent 看到的是「描述 + 本地路径」，
+  不是原图。要「上游自己看图」得等上游协议支持图片附件。
+- **转述有代价**：每张图一次多模态调用（免费端点常限流）。失败会退回路径句柄，
+  此时模型只能靠本地工具自己看图。
+- **describe-first 与 magpie 同策略**：magpie 侧是网关转述，本插件是宿主侧转述；
+  两者都只对「主模型不收图」的路由生效。
+- `assumeImageInput: false` 可退回旧行为（目录里申报什么就是什么）。
+
+---
+
 ## 验证
 
 ```powershell

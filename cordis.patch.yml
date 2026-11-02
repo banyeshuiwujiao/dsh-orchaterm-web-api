@@ -67,3 +67,15 @@
         strictBackend: true
         requiredCapabilities: []
         minBackendVersion: ''
+        # 图片：上游助手网关只收文本，图片在宿主侧转述成文字再发出去。
+        # assumeImageInput=true → 本路由的**所有**模型都申报可读图，
+        # 带图会话才不会在宿主 admission 阶段被拒（MODEL_DOES_NOT_SUPPORT_IMAGES）。
+        # 识图端点留空 = 读 ~/.dsh/.env 的 VISION_API_KEY / VISION_BASE_URL / VISION_MODEL
+        # （与 dsh-vision 插件同一套）；没配就只给归一化副本的本地路径。
+        assumeImageInput: true
+        visionApiKey: ''
+        visionBaseUrl: ''
+        visionModel: ''
+        visionTimeoutMs: 120000
+        visionMaxTokens: 1024
+        visionLang: 'zh'

@@ -62,7 +62,7 @@ import {
   tokenRemainingMs,
 } from './token-refresh.js'
 
-export const VERSION = '0.6.0'
+export const VERSION = '0.7.0'
 
 /** 能力自述：插件的 contract.js 按这份清单决定是否复用已起的后端。 */
 export const CAPABILITIES = Object.freeze([
@@ -76,18 +76,23 @@ export const CAPABILITIES = Object.freeze([
 
 /**
  * 内建模型目录（精简为 5 个核心模型）：
- * - DeepSeek-V4.1-Flash: Max/High/Low, 图片识别, 1M 长上下文, 思考模式
+ * - DeepSeek-V4.1-Flash: Max/High/Low, 1M 长上下文, 思考模式
  * - Hy4-preview: High, 1M 长上下文, 思考模式
  * - Hy3: High/Low, 128K, 思考模式
- * - Kimi-K3: Max/High/Low, 图片识别, 1M 长上下文, 思考模式
- * - GLM-5.3-Flash: Max/High/Low, 图片识别, 300K, 思考模式
+ * - Kimi-K3: Max/High/Low, 1M 长上下文, 思考模式
+ * - GLM-5.3-Flash: Max/High/Low, 300K, 思考模式
+ *
+ * ⚠️ modalities 一律含 'image'（v0.7.0）：反代对外说 OpenAI 方言，但上游助手网关的
+ * 协议是**纯文本**，图片字节发不过去；图片在宿主侧被转述成文字再交给上游。
+ * 这里标 image 是为了告诉宿主「这条路由接得住图片附件」，
+ * 否则带图会话会在 admission 阶段被拒（MODEL_DOES_NOT_SUPPORT_IMAGES）。
  */
 export const BUILTIN_MODELS = Object.freeze([
-  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', reasoning: true, contextWindow: 1048576, modalities: ['text', 'image'], description: 'OrcaTerm 默认推荐（思考模式 Max/High/Low，图片识别，1M 长上下文）' },
-  { id: 'hy4-preview', name: 'Hy4-preview', reasoning: true, contextWindow: 1048576, modalities: ['text'], description: '腾讯混元新一代预览（思考模式 High，1M 长上下文）' },
-  { id: 'hy3', name: 'Hy3', reasoning: true, contextWindow: 128000, modalities: ['text'], description: '腾讯混元 3 主力模型（思考模式 High/Low，128K）' },
-  { id: 'kimi-k3', name: 'Kimi-K3', reasoning: true, contextWindow: 1048576, modalities: ['text', 'image'], description: '月之暗面 K3（思考模式 Max/High/Low，图片识别，1M 长上下文）' },
-  { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', reasoning: true, contextWindow: 300000, modalities: ['text', 'image'], description: '智谱 GLM 5.3 Flash（思考模式 Max/High/Low，图片识别，300K 长上下文）' },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', reasoning: true, contextWindow: 1048576, modalities: ['text', 'image'], description: 'OrcaTerm 默认推荐（思考模式 Max/High/Low，图片经本地识图转述，1M 长上下文）' },
+  { id: 'hy4-preview', name: 'Hy4-preview', reasoning: true, contextWindow: 1048576, modalities: ['text', 'image'], description: '腾讯混元新一代预览（思考模式 High，图片经本地识图转述，1M 长上下文）' },
+  { id: 'hy3', name: 'Hy3', reasoning: true, contextWindow: 128000, modalities: ['text', 'image'], description: '腾讯混元 3 主力模型（思考模式 High/Low，图片经本地识图转述，128K）' },
+  { id: 'kimi-k3', name: 'Kimi-K3', reasoning: true, contextWindow: 1048576, modalities: ['text', 'image'], description: '月之暗面 K3（思考模式 Max/High/Low，图片经本地识图转述，1M 长上下文）' },
+  { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', reasoning: true, contextWindow: 300000, modalities: ['text', 'image'], description: '智谱 GLM 5.3 Flash（思考模式 Max/High/Low，图片经本地识图转述，300K 长上下文）' },
 ])
 
 function json(res, status, payload) {
@@ -692,6 +697,8 @@ async function handleModels(config, res) {
         object: 'model',
         owned_by: 'orcaterm-byo',
         name: m.name || m.id,
+        // BYO 模型同样标 image：宿主据此放行带图会话，图片在宿主侧转述成文字。
+        modalities: ['text', 'image'],
         ...(typeof m.provider === 'string' ? { provider: m.provider } : {}),
       })
     }

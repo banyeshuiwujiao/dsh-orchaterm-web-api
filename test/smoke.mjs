@@ -5,7 +5,8 @@ import { csrfCodeOf } from '../backend/credentials.js'
 import { buildConfig, ensureFreshCredential, toAssistantInput } from '../backend/server.js'
 import { createContextTracker, fingerprintMessages } from '../lib/context.js'
 import { DEFAULTS, MANAGER_KEYS } from '../lib/config.js'
-import { flattenContent, formatOpenAiMessages } from '../lib/openai.js'
+import { flattenContent, formatOpenAiMessages, imageHandleText } from '../lib/openai.js'
+import { describeImage, resolveVisionConfig } from '../lib/vision.js'
 import {
   askEnvelopeToQuestionTool,
   askResultToAnswerText,
@@ -939,6 +940,97 @@ console.log('27. 验证结构化指令残缺时的兜底（畸形 ask 信封 / �
   assert.equal(askWins.type, 'ask')
   assert.equal(askWins.content, 'B')
   assert.equal(askWins.content.includes('{TOOL_RESULT}'), false)
+}
+
+console.log('28. 验证图片能力申报与宿主侧转述（上游只收文本）...')
+{
+  const ref = {
+    attachmentId: 'sha256:e34a33b7bc3480cf',
+    name: '1792659961733.jpg',
+    width: 1440,
+    height: 2390,
+    mediaType: 'image/jpeg',
+  }
+  // 28a. 句柄：名字 + 摘要 + 预览尺寸 + 归一化副本路径 + 可写扩展名
+  const handle = imageHandleText(ref, { readonlyPath: 'C:\\Users\\Admin\\.dsh\\attachments\\v1\\objects\\e3\\e34a' })
+  assert.ok(handle.includes('Image "1792659961733.jpg" (sha256:e34a33b7bc3480cf)'))
+  assert.ok(handle.includes('request preview 1440x2390px'))
+  assert.ok(handle.includes('"C:\\\\Users\\\\Admin\\\\.dsh\\\\attachments'))
+  assert.ok(handle.includes('ending in .jpg before editing'))
+  assert.ok(handle.includes('sends no image bytes'))
+  // 28b. 没有可读路径时只给尺寸，不许编路径
+  const noPath = imageHandleText(ref, undefined)
+  assert.ok(noPath.includes('request preview 1440x2390px'))
+  assert.equal(noPath.includes('.dsh\\attachments'), false)
+
+  // 28c. image 块不再被丢弃：给了 imageHandle 就变成文字随行
+  const flat = flattenContent([{ type: 'image', attachment: ref }], { imageHandle: () => 'IMG' })
+  assert.equal(flat.text, 'IMG')
+  assert.deepEqual(flat.dropped, [])
+  // 没有 imageHandle 时仍是老规矩（丢弃），避免出现空的 user 消息
+  assert.deepEqual(flattenContent([{ type: 'image', attachment: ref }]).dropped, ['image'])
+
+  // 28d. 所有模型都申报 image（含目录外的 BYO 模型），关掉开关才回到目录原样
+  const adapter = new OrcaTermWebApiAdapter({}, null, null)
+  assert.deepEqual(adapter.inputModalitiesFor({ assumeImageInput: true }, undefined), ['text', 'image'])
+  assert.deepEqual(adapter.inputModalitiesFor({ assumeImageInput: true }, ['text']), ['text', 'image'])
+  assert.deepEqual(adapter.inputModalitiesFor({ assumeImageInput: false }, ['text']), ['text'])
+  assert.deepEqual(adapter.inputModalitiesFor({ assumeImageInput: false }, undefined), ['text'])
+  // 28d-2. 准入闸门实际读的是 resolveModel 的元信息：目录外的 BYO 模型也必须申报 image
+  const byo = await adapter.resolveModel(PROVIDER_ID, 'my-byo-model')
+  assert.deepEqual(byo.inputModalities, ['text', 'image'])
+  const known = await adapter.resolveModel(PROVIDER_ID, 'hy4-preview')
+  assert.deepEqual(known.inputModalities, ['text', 'image'])
+
+  // 28e. 识图端点：三件套齐了才启用，否则整条路由退化成「只给路径」
+  //     （这台机器的用户级环境里本来就配了 VISION_*，所以这里显式删掉再断言）
+  const envKeys = ['VISION_API_KEY', 'VISION_BASE_URL', 'VISION_MODEL']
+  const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]))
+  for (const key of envKeys) {
+    process.env[key] = 'sk-x'
+  }
+  process.env.VISION_BASE_URL = 'https://vision.example/v1'
+  process.env.VISION_MODEL = 'qwen-vl'
+  const on = resolveVisionConfig({})
+  assert.equal(on.enabled, true)
+  assert.equal(on.model, 'qwen-vl')
+  assert.equal(on.baseUrl, 'https://vision.example/v1')
+  for (const key of envKeys) delete process.env[key]
+  assert.equal(resolveVisionConfig({}).enabled, false)
+  assert.equal(resolveVisionConfig({ visionApiKey: 'k', visionBaseUrl: 'u', visionModel: 'm' }).enabled, true)
+  for (const [key, value] of Object.entries(saved)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+
+  // 28f. describe-first：图片字节 → 多模态端点 → 描述文字
+  const originalFetch = globalThis.fetch
+  let seen = null
+  globalThis.fetch = async (url, init) => {
+    seen = { url, init }
+    return new Response(JSON.stringify({ choices: [{ message: { content: '一只猪的四种成像对比图' } }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const ok = await describeImage(ref, {
+      config: on,
+      readImage: async () => ({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/jpeg' }),
+    })
+    assert.equal(ok.ok, true)
+    assert.equal(ok.text, '一只猪的四种成像对比图')
+    assert.equal(seen.url, 'https://vision.example/v1/chat/completions')
+    assert.ok(seen.init.headers.authorization.includes('Bearer sk-x'))
+    const payload = JSON.parse(seen.init.body)
+    assert.ok(payload.messages[0].content[1].image_url.url.startsWith('data:image/jpeg;base64,'))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  // 28g. 端点没配 → 直接失败（上层会退回路径句柄，不静默丢图）
+  const off = await describeImage(ref, { config: resolveVisionConfig({}), readImage: async () => undefined })
+  assert.equal(off.ok, false)
+  assert.equal(off.reason, 'vision-not-configured')
 }
 
 console.log('smoke 测试全部通过！')

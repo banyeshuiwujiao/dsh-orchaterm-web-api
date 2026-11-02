@@ -1,5 +1,42 @@
 All notable changes to the `dsh-orchaterm-web-api` plugin will be documented in this file.
 
+## [0.7.0] - 2026-10-28
+
+带图会话能发出去了：所有 OrcaTerm 模型都申报可读图，图片在宿主侧转述成文字再交给上游。
+
+### Symptom
+Web 端上传图片后发送，会话被宿主拒掉：`Model "hy3" does not support image input.`
+（reason `MODEL_DOES_NOT_SUPPORT_IMAGES`），界面提示「当前模型不支持图片，请切换支持图片的模型」。
+换 magpie 的模型就能发 —— 因为 magpie 侧（网关转述）与 kiro/glm-5（本地 dsh-vision）都放行。
+
+### Root cause
+插件照实申报 `inputModalities: ['text']`（上游助手网关的协议确实是纯文本，图片字节发不过去）。
+但 DSH Web 侧本来就有两条现成的识图路子：**magpie** 的网关侧转述、**dsh-vision** 的本地多模态。
+「上游模型自己看不看得见图」被当成了「这条路由能不能接图片附件」—— 两件事，被混成了一件。
+另外准入门读的是 `resolveModel()` 的元信息，目录外的 BYO 模型连 `KNOWN_MODELS` 都匹配不上，
+哪怕改了目录也仍然是 text-only。
+
+### Fix
+- `lib/config.js`：`KNOWN_MODELS` 五个模型全部 `inputModalities: ['text','image']`；
+  新增 `assumeImageInput`（默认 `true`）、`visionApiKey` / `visionBaseUrl` / `visionModel` /
+  `visionTimeoutMs` / `visionMaxTokens` / `visionLang`。
+- `lib/provider.js`：新增 `inputModalitiesFor()`，`listModels()` 与 **`resolveModel()`**
+  （准入门实际读的路径）都走它 —— 目录外的 BYO 模型同样申报 image；
+  新增 `prepareImages()` / `describeImage()`：图片块在请求装配阶段换成文字；
+  识图结果按附件 id 缓存（失败不缓存，下一轮可重试）；`apply()` 里用 `ctx.get('attachments')`
+  与 `ctx.get('fs')` 取宿主的路径映射与图片字节（调用时取，不在 apply 期取快照）。
+- `lib/openai.js`：新增 `imageHandleText()`（形态对齐宿主 `requestImageHandleText`）；
+  `flattenContent()` 不再把 image 块直接丢弃，而是产出句柄文字。
+- `lib/vision.js`（新）：宿主侧 describe-first 识图，端点与 dsh-vision 插件共用
+  `VISION_API_KEY` / `VISION_BASE_URL` / `VISION_MODEL` / `VISION_LANG`。
+- `backend/server.js`：`BUILTIN_MODELS` 的 modalities 与 BYO 条目统一含 `image`。
+- `cordis.patch.yml` 与 web profile 的 config 块同步新增 7 个键。
+
+### 边界（如实记录）
+- 上游收不到像素：图片在宿主侧就变成文字（描述 + 本地副本路径），不是原图。
+- 端点没配/调用失败 → 只给路径句柄，不静默丢图，日志报原因。
+- 每张图一次多模态调用，免费端点限流时会退化成「模型自己用本地工具看图」。
+
 ## [0.6.0] - 2026-10-27
 
 AccessToken 自己续期（`OAuthRefreshToken`）—— 不再需要把 OrcaTerm 客户端开着。
